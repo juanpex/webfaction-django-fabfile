@@ -44,14 +44,14 @@ def deploy():
 def bootstrap():
     run('mkdir -p %s/lib/python2.7' % env.home)
     run('easy_install-2.7 pip')
-    run('pip-2.7 install virtualenv')
+    run('pip-2.7 install --upgrade virtualenv')
     _install_virtualenvwrapper()
     run('mkdir -p %s' % env.virtualenv_dir)
 
 
 def _install_virtualenvwrapper():
     if not exists('sh /home/%s/install_virtualenvwrapper.sh' % env.user):
-        upload_template('templates/install_virtualenvwrapper.sh','/home/%s/' % env.user, {})
+        upload_template('templates/install_virtualenvwrapper.sh', '/home/%s/' % env.user, {})
         run('sh /home/%s/install_virtualenvwrapper.sh' % env.user)
 
 
@@ -77,7 +77,7 @@ def install_app():
                         )
 
     with cd(env.home + '/webapps'):
-        if not exists(env.project_dir + '/setup.py') and not exists(env.project_dir + '/manage.py'):
+        if not exists(env.settings_dir + '/setup.py') and not exists(env.settings_dir + '/manage.py'):
             run('git clone %s %s' % (env.repo, env.project_dir))
 
     _create_ve(env.project)
@@ -89,11 +89,15 @@ def install_supervisor():
     """Installs supervisor in its wf app and own virtualenv
     """
     response = _webfaction_create_app("supervisor")
+    if not exists('$HOME/etc'):
+        run('ln -s $HOME/webapps/supervisor etc')
     env.supervisor_port = response['port']
     _create_ve('supervisor')
     if not exists(env.supervisor_ve_dir + 'bin/supervisord'):
         _ve_run('supervisor', 'pip install supervisor')
     env.password = SSH_PASSWORD
+    run('chmod +x `python -c "import supervisor;print supervisor.__path__[0]"`/supervisord.py')
+    run('chmod +x `python -c "import supervisor;print supervisor.__path__[0]"`/supervisorctl.py')
     # uplaod supervisor.conf template
     with settings(warn_only=True):
         run('rm %s/supervisord.conf' % env.supervisor_dir)
@@ -112,6 +116,9 @@ def install_supervisor():
     # upload and install crontab
     with settings(warn_only=True):
         run('rm %s/start_supervisor.sh' % env.supervisor_dir)
+    with settings(warn_only=True):
+        run('supervisord')
+
     upload_template('templates/start_supervisor.sh',
                     '%s/start_supervisor.sh' % env.supervisor_dir,
                     {
@@ -129,7 +136,6 @@ def install_supervisor():
            env.supervisor_dir)
     run('crontab /tmp/%s' % filename)
 
-
     # create supervisor/conf.d
     with cd(env.supervisor_dir):
         run('mkdir -p conf.d')
@@ -145,11 +151,11 @@ def install_supervisor():
 def reload_app(arg=None):
     """Pulls app and refreshes requirements"""
 
-    with cd(env.project_dir):
+    with cd(env.settings_dir):
         run('git pull')
 
     if arg != "quick":
-        with cd(env.project_dir):
+        with cd(env.settings_dir):
             _ve_run(
                 env.project, "easy_install -i http://downloads.egenix.com/python/index/ucs4/ egenix-mx-base")
             with settings(warn_only=True):

@@ -2,8 +2,8 @@
 
 # HACER EL CHMOD DE LOS .py
 NAME=supervisord
-SUPERVISORD=/home/%(user)s/lib/python2.7/supervisor/supervisord.py
-SUPERVISORCTL=/home/%(user)s/lib/python2.7/supervisor/supervisorctl.py
+SUPERVISORD=`python -c "import supervisor;print supervisor.__path__[0]"`/supervisord.py
+SUPERVISORCTL=`python -c "import supervisor;print supervisor.__path__[0]"`/supervisorctl.py
 PIDFILE=/home/%(user)s/.supervisord.pid
 OPTS="-c /home/%(user)s/webapps/supervisor/supervisord.conf"
 PS=$NAME
