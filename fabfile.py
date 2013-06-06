@@ -10,41 +10,52 @@ from fabric.contrib.files import upload_template, exists, append
 import xmlrpclib
 import sys
 
-import string, random
+import string
+import random
 
 try:
-    from fabsettings import WF_HOST, PROJECT_NAME, REPOSITORY, USER, PASSWORD, VIRTUALENVS, SETTINGS_SUBDIR
+    from fabsettings import SSH_PASSWORD, SUP_USER, WF_MACHINE, SUP_PASSWORD, WF_HOST, PROJECT_NAME, REPOSITORY, USER, PASSWORD, VIRTUALENVS, SETTINGS_SUBDIR
 except ImportError:
     print "ImportError: Couldn't find fabsettings.py, it either does not exist or giving import problems (missing settings)"
     sys.exit(1)
 
-env.hosts           = [WF_HOST]
-env.user            = USER
-env.password        = PASSWORD
-env.home            = "/home/%s" % USER
-env.project         = PROJECT_NAME
-env.repo            = REPOSITORY
-env.project_dir     = env.home + '/webapps/' + PROJECT_NAME
-env.settings_dir    = env.project_dir + '/' + SETTINGS_SUBDIR
-env.supervisor_dir  = env.home + '/webapps/supervisor'
-env.virtualenv_dir  = VIRTUALENVS
+env.hosts = [WF_HOST]
+env.user = USER
+env.password = PASSWORD
+env.home = "/home/%s" % USER
+env.project = PROJECT_NAME
+env.repo = REPOSITORY
+env.project_dir = env.home + '/webapps/' + PROJECT_NAME
+env.settings_dir = env.project_dir + '/' + SETTINGS_SUBDIR
+env.supervisor_dir = env.home + '/webapps/supervisor'
+env.virtualenv_dir = VIRTUALENVS
 env.supervisor_ve_dir = env.virtualenv_dir + '/supervisor'
+
 
 def deploy():
     bootstrap()
-    
+
     if not exists(env.supervisor_dir):
         install_supervisor()
-    
-    install_app()
 
+    install_app()
 
 
 def bootstrap():
     run('mkdir -p %s/lib/python2.7' % env.home)
     run('easy_install-2.7 pip')
-    run('pip-2.7 install virtualenv virtualenvwrapper')
+    run('pip-2.7 install virtualenv')
+    _install_virtualenvwrapper()
+    run('mkdir -p %s' % env.virtualenv_dir)
 
+
+def _install_virtualenvwrapper():
+    if not exists('sh /home/%s/install_virtualenvwrapper.sh' % env.user):
+        upload_template('templates/install_virtualenvwrapper.sh','/home/%s/' % env.user, {})
+        run('sh /home/%s/install_virtualenvwrapper.sh' % env.user)
+
+
+# memcached -m64 -s /home/clk4/webapps/neutral2/cache/memcached.sock -P /home/clk4/webapps/neutral2/cache/memcached.pid
 
 def install_app():
     """Installs the django project in its own wf app and virtualenv
@@ -52,25 +63,27 @@ def install_app():
     response = _webfaction_create_app(env.project)
     env.app_port = response['port']
 
-    # upload template to supervisor conf
-    upload_template('templates/gunicorn.conf',
-                    '%s/conf.d/%s.conf' % (env.supervisor_dir,env.project),
-                    {
-                        'project': env.project,
-                        'project_dir': env.settings_dir,
-                        'virtualenv':'%s/%s' % (env.virtualenv_dir, env.project),
-                        'port': env.app_port,
-                        'user': env.user,
-                     }
-                    )
+    with settings(warn_only=True):
+        # upload template to supervisor conf
+        upload_template('templates/gunicorn.conf',
+                        '%s/conf.d/%s.conf' % (env.supervisor_dir, env.project),
+                        {
+                            'project': env.project,
+                            'project_dir': env.settings_dir,
+                            'virtualenv': '%s/%s' % (env.virtualenv_dir, env.project),
+                            'port': env.app_port,
+                            'user': env.user,
+                        }
+                        )
 
     with cd(env.home + '/webapps'):
-        if not exists(env.project_dir + '/setup.py'):
-            run('git clone %s %s' % (env.repo ,env.project_dir))
+        if not exists(env.project_dir + '/setup.py') and not exists(env.project_dir + '/manage.py'):
+            run('git clone %s %s' % (env.repo, env.project_dir))
 
     _create_ve(env.project)
     reload_app()
     restart_app()
+
 
 def install_supervisor():
     """Installs supervisor in its wf app and own virtualenv
@@ -79,46 +92,54 @@ def install_supervisor():
     env.supervisor_port = response['port']
     _create_ve('supervisor')
     if not exists(env.supervisor_ve_dir + 'bin/supervisord'):
-        _ve_run('supervisor','pip install supervisor')
+        _ve_run('supervisor', 'pip install supervisor')
+    env.password = SSH_PASSWORD
     # uplaod supervisor.conf template
+    with settings(warn_only=True):
+        run('rm %s/supervisord.conf' % env.supervisor_dir)
     upload_template('templates/supervisord.conf',
-                     '%s/supervisord.conf' % env.supervisor_dir,
+                    '%s/supervisord.conf' % env.supervisor_dir,
                     {
                         'user':     env.user,
                         'password': env.password,
                         'port': env.supervisor_port,
                         'dir':  env.supervisor_dir,
+                        'suppass': SUP_PASSWORD,
+                        'supuser': SUP_USER,
                     },
                     )
 
     # upload and install crontab
+    with settings(warn_only=True):
+        run('rm %s/start_supervisor.sh' % env.supervisor_dir)
     upload_template('templates/start_supervisor.sh',
                     '%s/start_supervisor.sh' % env.supervisor_dir,
-                     {
+                    {
                         'user':     env.user,
                         'virtualenv': env.supervisor_ve_dir,
                     },
                     mode=0750,
                     )
-
-
-
+    env.password = PASSWORD
     # add to crontab
-
-    filename = ''.join(random.choice(string.ascii_uppercase + string.digits) for x in range(7))
+    filename = ''.join(random.choice(
+        string.ascii_uppercase + string.digits) for x in range(7))
     run('crontab -l > /tmp/%s' % filename)
-    append('/tmp/%s' % filename, '*/10 * * * * %s/start_supervisor.sh start' % env.supervisor_dir)
+    append('/tmp/%s' % filename, '*/10 * * * * %s/start_supervisor.sh start' %
+           env.supervisor_dir)
     run('crontab /tmp/%s' % filename)
 
 
     # create supervisor/conf.d
     with cd(env.supervisor_dir):
-        run('mkdir conf.d')
+        run('mkdir -p conf.d')
+
+    run('chmod +x /home/%s/lib/python2.7/supervisor/supervisord.py' % env.user)
+    run('chmod +x /home/%s/lib/python2.7/supervisor/supervisorctl.py' % env.user)
 
     with cd(env.supervisor_dir):
         with settings(warn_only=True):
             run('./start_supervisor.sh stop && ./start_supervisor.sh start')
-
 
 
 def reload_app(arg=None):
@@ -127,13 +148,19 @@ def reload_app(arg=None):
     with cd(env.project_dir):
         run('git pull')
 
-    if arg <> "quick":
+    if arg != "quick":
         with cd(env.project_dir):
-            _ve_run(env.project, "easy_install -i http://downloads.egenix.com/python/index/ucs4/ egenix-mx-base")
-            _ve_run(env.project, "pip install -r requirements.pip")
-            _ve_run(env.project, "pip install -e ./")
-            _ve_run(env.project, "manage.py syncdb")
-            _ve_run(env.project, "manage.py collectstatic")
+            _ve_run(
+                env.project, "easy_install -i http://downloads.egenix.com/python/index/ucs4/ egenix-mx-base")
+            with settings(warn_only=True):
+                _ve_run(env.project, "pip install -r requirements.pip")
+            with settings(warn_only=True):
+                _ve_run(env.project, "pip install -r requirements.txt")
+            # with settings(warn_only=True):
+            #     _ve_run(env.project, "pip install -e ./")
+            _ve_run(env.project, "python manage.py syncdb")
+            _ve_run(env.project, "python manage.py migrate")
+            _ve_run(env.project, "python manage.py collectstatic --noinput")
 
     restart_app()
 
@@ -142,37 +169,44 @@ def restart_app():
     """Restarts the app using supervisorctl"""
 
     with cd(env.supervisor_dir):
-        _ve_run('supervisor','supervisorctl reread && supervisorctl reload')
-        _ve_run('supervisor','supervisorctl restart %s' % env.project)
+        _ve_run('supervisor', 'supervisorctl reread && supervisorctl reload')
+        _ve_run('supervisor', 'supervisorctl restart %s' % env.project)
 
-### Helper functions
+# Helper functions
+
 
 def _create_ve(name):
     """creates virtualenv using virtualenvwrapper
     """
-    if not exists(env.virtualenv_dir + '/name'):
+    if not exists(env.virtualenv_dir + '/%s' % name):
         with cd(env.virtualenv_dir):
-            run('mkvirtualenv -p /usr/local/bin/python2.7 --no-site-packages %s' % name)
+            run('mkvirtualenv -p /usr/local/bin/python2.7 --no-site-packages %s' %
+                name)
     else:
         print "Virtualenv with name %s already exists. Skipping." % name
 
-def _ve_run(ve,cmd):
+
+def _ve_run(ve, cmd):
     """virtualenv wrapper for fabric commands
     """
     run("""source %s/%s/bin/activate && %s""" % (env.virtualenv_dir, ve, cmd))
+
 
 def _webfaction_create_app(app):
     """creates a "custom app with port" app on webfaction using the webfaction public API.
     """
     server = xmlrpclib.ServerProxy('https://api.webfaction.com/')
-    session_id, account = server.login(USER, PASSWORD)
+    session_id, account = server.login(USER, PASSWORD, WF_MACHINE)
     try:
-        response = server.create_app(session_id, app, 'custom_app_with_port', False, '')
+        for x in server.list_apps(session_id):
+            if app == x['name']:
+                print "App on webfaction loaded: %s" % x
+                return x
+        response = server.create_app(
+            session_id, app, 'custom_app_with_port', False, '')
         print "App on webfaction created: %s" % response
         return response
 
     except xmlrpclib.Fault:
         print "Could not create app on webfaction %s, app name maybe already in use" % app
         sys.exit(1)
-
-
