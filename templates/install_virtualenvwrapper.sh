@@ -8,7 +8,7 @@ easy_install-${PYTHONVER} pip
 pip-${PYTHONVER} install virtualenv
 
 cd $HOME/src
-wget http://pypi.python.org/packages/source/v/virtualenvwrapper/virtualenvwrapper-${PIPVERSION}.tar.gz
+wget --no-check-certificate http://pypi.python.org/packages/source/v/virtualenvwrapper/virtualenvwrapper-${PIPVERSION}.tar.gz
 tar -xzf virtualenvwrapper-${PIPVERSION}.tar.gz
 cd virtualenvwrapper-${PIPVERSION}
 PYTHONPATH=$HOME/lib/$PYTHON $PYTHON setup.py install --home=$HOME

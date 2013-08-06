@@ -75,9 +75,8 @@ def install_app():
                             'user': env.user,
                         }
                         )
-
     with cd(env.home + '/webapps'):
-        if not exists(env.settings_dir + '/setup.py') and not exists(env.settings_dir + '/manage.py'):
+        if not exists(env.settings_dir + '/setup.py') and not exists(env.settings_dir + '/manage.py') and not exists(env.project_dir + '/manage.py'):
             run('git clone %s %s' % (env.repo, env.project_dir))
 
     _create_ve(env.project)
@@ -89,81 +88,83 @@ def install_supervisor():
     """Installs supervisor in its wf app and own virtualenv
     """
     response = _webfaction_create_app("supervisor")
-    if not exists('$HOME/etc'):
-        run('ln -s $HOME/webapps/supervisor etc')
+    if not exists('/home/%s/etc' % env.user):
+        run('ln -s /home/%s/webapps/supervisor etc' % env.user)
     env.supervisor_port = response['port']
     _create_ve('supervisor')
-    if not exists(env.supervisor_ve_dir + 'bin/supervisord'):
-        _ve_run('supervisor', 'pip install supervisor')
+    # if not exists(env.supervisor_ve_dir + 'bin/supervisord'):
+    #     run('workon supervisor')
+    #     # _ve_run('supervisor', 'pip install supervisor')
     env.password = SSH_PASSWORD
-    run('chmod +x `python -c "import supervisor;print supervisor.__path__[0]"`/supervisord.py')
-    run('chmod +x `python -c "import supervisor;print supervisor.__path__[0]"`/supervisorctl.py')
-    # uplaod supervisor.conf template
-    with settings(warn_only=True):
-        run('rm %s/supervisord.conf' % env.supervisor_dir)
-    upload_template('templates/supervisord.conf',
-                    '%s/supervisord.conf' % env.supervisor_dir,
-                    {
-                        'user':     env.user,
-                        'password': env.password,
-                        'port': env.supervisor_port,
-                        'dir':  env.supervisor_dir,
-                        'suppass': SUP_PASSWORD,
-                        'supuser': SUP_USER,
-                    },
-                    )
-
-    # upload and install crontab
-    with settings(warn_only=True):
-        run('rm %s/start_supervisor.sh' % env.supervisor_dir)
-    with settings(warn_only=True):
-        run('supervisord')
-
-    upload_template('templates/start_supervisor.sh',
-                    '%s/start_supervisor.sh' % env.supervisor_dir,
-                    {
-                        'user':     env.user,
-                        'virtualenv': env.supervisor_ve_dir,
-                    },
-                    mode=0750,
-                    )
-    env.password = PASSWORD
-    # add to crontab
-    filename = ''.join(random.choice(
-        string.ascii_uppercase + string.digits) for x in range(7))
-    run('crontab -l > /tmp/%s' % filename)
-    append('/tmp/%s' % filename, '*/10 * * * * %s/start_supervisor.sh start' %
-           env.supervisor_dir)
-    run('crontab /tmp/%s' % filename)
-
-    # create supervisor/conf.d
-    with cd(env.supervisor_dir):
-        run('mkdir -p conf.d')
-
-    run('chmod +x /home/%s/lib/python2.7/supervisor/supervisord.py' % env.user)
-    run('chmod +x /home/%s/lib/python2.7/supervisor/supervisorctl.py' % env.user)
-
-    with cd(env.supervisor_dir):
+    with prefix('workon supervisor'):
+        run('pip install supervisor')
+        run('chmod +x `python -c "import supervisor;print supervisor.__path__[0]"`/supervisord.py')
+        run('chmod +x `python -c "import supervisor;print supervisor.__path__[0]"`/supervisorctl.py')
+        # uplaod supervisor.conf template
         with settings(warn_only=True):
-            run('./start_supervisor.sh stop && ./start_supervisor.sh start')
+            run('rm %s/supervisord.conf' % env.supervisor_dir)
+        upload_template('templates/supervisord.conf',
+                        '%s/supervisord.conf' % env.supervisor_dir,
+                        {
+                            'user':     env.user,
+                            'password': env.password,
+                            'port': env.supervisor_port,
+                            'dir':  env.supervisor_dir,
+                            'suppass': SUP_PASSWORD,
+                            'supuser': SUP_USER,
+                        },
+                        )
+
+        # upload and install crontab
+        with settings(warn_only=True):
+            run('rm %s/start_supervisor.sh' % env.supervisor_dir)
+        with settings(warn_only=True):
+            run('supervisord')
+
+        upload_template('templates/start_supervisor.sh',
+                        '%s/start_supervisor.sh' % env.supervisor_dir,
+                        {
+                            'user':     env.user,
+                            'virtualenv': env.supervisor_ve_dir,
+                        },
+                        mode=0750,
+                        )
+        env.password = PASSWORD
+        # add to crontab
+        filename = ''.join(random.choice(
+            string.ascii_uppercase + string.digits) for x in range(7))
+        run('crontab -l > /tmp/%s' % filename)
+        append('/tmp/%s' % filename, '*/10 * * * * %s/start_supervisor.sh start' %
+               env.supervisor_dir)
+        run('crontab /tmp/%s' % filename)
+
+        # create supervisor/conf.d
+        with cd(env.supervisor_dir):
+            run('mkdir -p conf.d')
+
+        # run('chmod +x /home/%s/lib/python2.7/supervisor/supervisord.py' % env.user)
+        # run('chmod +x /home/%s/lib/python2.7/supervisor/supervisorctl.py' % env.user)
+
+        with cd(env.supervisor_dir):
+            with settings(warn_only=True):
+                run('./start_supervisor.sh stop && ./start_supervisor.sh start')
 
 
 def reload_app(arg=None):
     """Pulls app and refreshes requirements"""
-
     with cd(env.settings_dir):
         run('git pull')
 
     if arg != "quick":
-        with cd(env.settings_dir):
-            _ve_run(
-                env.project, "easy_install -i http://downloads.egenix.com/python/index/ucs4/ egenix-mx-base")
+        with prefix("cd %s" % env.project_dir):
+            _ve_run(env.project, "easy_install -i http://downloads.egenix.com/python/index/ucs4/ egenix-mx-base")
             with settings(warn_only=True):
                 _ve_run(env.project, "pip install -r requirements.pip")
             with settings(warn_only=True):
                 _ve_run(env.project, "pip install -r requirements.txt")
             # with settings(warn_only=True):
             #     _ve_run(env.project, "pip install -e ./")
+            _ve_run(env.project, "pip install Django psycopg2")
             _ve_run(env.project, "python manage.py syncdb")
             _ve_run(env.project, "python manage.py migrate")
             _ve_run(env.project, "python manage.py collectstatic --noinput")
@@ -202,10 +203,10 @@ def _webfaction_create_app(app):
     """creates a "custom app with port" app on webfaction using the webfaction public API.
     """
     server = xmlrpclib.ServerProxy('https://api.webfaction.com/')
-    session_id, account = server.login(USER, PASSWORD, WF_MACHINE)
+    session_id, account = server.login(USER, PASSWORD, WF_MACHINE.lower().title())
     try:
         for x in server.list_apps(session_id):
-            if app == x['name']:
+            if app == x['name'] and WF_MACHINE.lower().title() == x['machine']:
                 print "App on webfaction loaded: %s" % x
                 return x
         response = server.create_app(
